@@ -1,0 +1,30 @@
+{
+  "name": "max-efficiency-bot",
+  "version": "1.0.0",
+  "description": "MAX messenger productivity bot with tasks, events, notifications, and Pomodoro timer.",
+  "type": "module",
+  "main": "src/bot.js",
+  "scripts": {
+    "start": "node src/bot.js",
+    "dev": "nodemon --watch src src/bot.js"
+  },
+  "keywords": [
+    "max",
+    "bot",
+    "productivity",
+    "pomodoro",
+    "tasks"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@maxhub/max-bot-api": "^0.2.1",
+    "date-fns": "^4.1.0",
+    "dotenv": "^16.4.7",
+    "node-schedule": "^2.1.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}
+
