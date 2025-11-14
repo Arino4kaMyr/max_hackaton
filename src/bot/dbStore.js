@@ -1,9 +1,9 @@
-import { UserRepository } from '../../src/database/repositories/userRepository.js';
-import { TaskRepository } from '../../src/database/repositories/taskRepository.js';
-import { EventRepository } from '../../src/database/repositories/eventRepository.js';
-import { UserSettingsRepository } from '../../src/database/repositories/userSettingsRepository.js';
-import { PomodoroRepository } from '../../src/database/repositories/pomodoroRepository.js';
-import { getPrisma } from '../../src/database/prisma.js';
+import { UserRepository } from '../database/repositories/userRepository.js';
+import { TaskRepository } from '../database/repositories/taskRepository.js';
+import { EventRepository } from '../database/repositories/eventRepository.js';
+import { UserSettingsRepository } from '../database/repositories/userSettingsRepository.js';
+import { PomodoroRepository } from '../database/repositories/pomodoroRepository.js';
+import { getPrisma } from '../database/prisma.js';
 
 class DBStore {
   constructor() {
@@ -13,11 +13,10 @@ class DBStore {
     this.settingsRepo = new UserSettingsRepository();
     this.pomodoroRepo = new PomodoroRepository();
     
-    // Сессии диалогов храним в памяти (они временные)
     this.sessions = new Map();
+    this.lastMessageIds = new Map();
   }
 
-  // ========== User ==========
   async ensureUser(maxUserId, chatId = null) {
     const user = await this.userRepo.createOrFind({
       maxUserId: maxUserId.toString(),
@@ -46,11 +45,9 @@ class DBStore {
     };
   }
 
-  // ========== Tasks ==========
   async upsertTask(maxUserId, payload) {
     const user = await this.ensureUser(maxUserId);
     
-    // Если есть id - обновляем, иначе создаем
     if (payload.id) {
       return await this.taskRepo.update(payload.id, {
         title: payload.title,
@@ -73,7 +70,6 @@ class DBStore {
     
     const tasks = await this.taskRepo.findByUserId(user.id, includeCompleted);
     
-    // Преобразуем в формат, который ожидает бот (с числовыми id)
     return tasks.map((task, index) => ({
       id: index + 1, // Для совместимости с ботом используем порядковый номер
       _dbId: task.id, // Сохраняем реальный ID из БД
@@ -147,7 +143,6 @@ class DBStore {
     return null;
   }
 
-  // ========== Events ==========
   async upsertEvent(maxUserId, payload) {
     const user = await this.ensureUser(maxUserId);
     
@@ -159,7 +154,6 @@ class DBStore {
       reminderMinutes: payload.reminderMinutes || null,
     });
     
-    // Возвращаем в формате, совместимом с getEvents
     const events = await this.getEvents(maxUserId);
     return events.find(e => e._dbId === newEvent.id);
   }
@@ -200,7 +194,6 @@ class DBStore {
     return null;
   }
 
-  // ========== Settings ==========
   async getSettings(maxUserId) {
     const user = await this.getUserByMaxId(maxUserId);
     if (!user) {
@@ -219,13 +212,11 @@ class DBStore {
     const user = await this.getUserByMaxId(maxUserId);
     if (!user) return true;
     
-    // Проверяем, есть ли настройки в БД
     const prisma = getPrisma();
     const settings = await prisma.userSettings.findUnique({
       where: { userId: user.id },
     });
     
-    // Если настройки не созданы, значит пользователь новый
     return !settings;
   }
 
@@ -234,7 +225,6 @@ class DBStore {
     return await this.settingsRepo.createOrUpdate(user.id, updates);
   }
 
-  // ========== Sessions (в памяти) ==========
   setSession(maxUserId, session) {
     this.sessions.set(maxUserId.toString(), session);
   }
@@ -247,7 +237,18 @@ class DBStore {
     this.sessions.delete(maxUserId.toString());
   }
 
-  // ========== Pomodoro ==========
+  setLastMessageId(maxUserId, messageId) {
+    this.lastMessageIds.set(maxUserId.toString(), messageId);
+  }
+
+  getLastMessageId(maxUserId) {
+    return this.lastMessageIds.get(maxUserId.toString());
+  }
+
+  clearLastMessageId(maxUserId) {
+    this.lastMessageIds.delete(maxUserId.toString());
+  }
+
   async createPomodoroSession(maxUserId, sessionData) {
     const user = await this.ensureUser(maxUserId);
     
@@ -276,7 +277,6 @@ class DBStore {
     return await this.pomodoroRepo.complete(sessionId);
   }
 
-  // ========== Pomodoro Статистика ==========
   async getPomodoroStats(maxUserId) {
     const user = await this.getUserByMaxId(maxUserId);
     if (!user) return null;

@@ -1,24 +1,18 @@
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { Bot, Keyboard } from '@maxhub/max-bot-api';
 import { format, parse, isValid, differenceInDays, isPast, startOfDay, isToday } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
+import { loadEnv } from '../config/env.js';
 import store from './dbStore.js';
-import NotificationService from './notifications.js';
-import PomodoroManager from './pomodoro.js';
-import { generatePomodoroChart, cleanupImage } from './utils/chartGenerator.js';
-import { readFile } from 'fs/promises';
+import NotificationService from '../services/notifications.js';
+import PomodoroManager from '../services/pomodoro.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const env = loadEnv();
 
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-
-const bot = new Bot(process.env.BOT_TOKEN);
+const bot = new Bot(env.botToken);
 const notifications = new NotificationService(bot, store);
-const pomodoro = new PomodoroManager(bot);
+
+let pomodoro = null;
 
 const MAIN_KEYBOARD = Keyboard.inlineKeyboard([
   [
@@ -50,8 +44,9 @@ const EVENTS_KEYBOARD = Keyboard.inlineKeyboard([
 ]);
 
 const TIMER_START_KEYBOARD = Keyboard.inlineKeyboard([
-  [Keyboard.button.callback('🚀 По задаче', 'timer:start_task')],
-  [Keyboard.button.callback('🧠 Свободный режим', 'timer:start_free')],
+  [Keyboard.button.callback('▶️ Начать', 'timer:start')],
+  [Keyboard.button.callback('⚙️ Настройки', 'timer:settings')],
+  [Keyboard.button.callback('📊 Статистика', 'timer:stats')],
   [Keyboard.button.callback('⬅️ В меню', 'menu:back')],
 ]);
 
@@ -100,7 +95,6 @@ function formatEvent(event) {
     }`;
 }
 
-// Названия месяцев на русском (в разных регистрах)
 const MONTH_NAMES = {
   'январь': 1, 'января': 1, 'янв': 1, 'january': 1, 'jan': 1,
   'февраль': 2, 'февраля': 2, 'фев': 2, 'february': 2, 'feb': 2,
@@ -119,13 +113,11 @@ const MONTH_NAMES = {
 function parseMonth(input) {
   const normalized = input.trim().toLowerCase();
   
-  // Пробуем как число
   const monthNum = parseInt(normalized, 10);
   if (!isNaN(monthNum) && monthNum >= 1 && monthNum <= 12) {
     return monthNum;
   }
   
-  // Пробуем как название месяца
   if (MONTH_NAMES[normalized]) {
     return MONTH_NAMES[normalized];
   }
@@ -169,14 +161,12 @@ async function showDailyDigest(ctx) {
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
-  // Задачи на сегодня
   const todayTasks = tasks.filter((task) => {
     if (!task.dueDate) return false;
     const due = new Date(task.dueDate);
     return due >= today && due < tomorrow;
   });
 
-  // События на сегодня (с 00:00 до 23:59)
   const todayEvents = events.filter((event) => {
     const eventDate = new Date(event.datetime);
     return eventDate >= today && eventDate < tomorrow;
@@ -204,14 +194,10 @@ async function showDailyDigest(ctx) {
     .filter(Boolean)
     .join('\n');
 
-  await ctx.reply(summary, {
+  await sendMessageWithButtons(ctx, summary, {
     format: 'markdown',
     attachments: [MAIN_KEYBOARD],
   });
-}
-
-async function showMainMenu(ctx, message = 'Что будем делать?') {
-  await ctx.reply(message, { attachments: [MAIN_KEYBOARD] });
 }
 
 async function startTaskFlow(ctx) {
@@ -226,44 +212,6 @@ async function startEventFlow(ctx) {
   store.clearSession(userId);
   store.setSession(userId, { type: 'event', step: 'title', draft: {} });
   await ctx.reply('Название события?', { attachments: [MENU_BACK] });
-}
-
-async function startPomodoroFlow(ctx, { mode }) {
-  const userId = getUserId(ctx);
-
-  if (mode === 'free') {
-    store.clearSession(userId);
-    store.setSession(userId, { type: 'pomodoro_free', step: 'work', draft: {} });
-    await ctx.reply('Сколько минут работать? (по умолчанию 25)', { attachments: [MENU_BACK] });
-    return;
-  }
-
-  const tasks = await store.getTasks(userId);
-  if (!tasks.length) {
-    await ctx.reply('У вас пока нет задач. Сначала создайте задачу.', { attachments: [MENU_BACK] });
-    return;
-  }
-
-  const lines = tasks
-    .slice(-10)
-    .map(
-      (task) =>
-        `#${task.id}: ${task.title}${task.dueDate ? ` (до ${format(new Date(task.dueDate), 'dd MMM HH:mm', { locale: ru })})` : ''
-        }`,
-    )
-    .join('\n');
-
-  store.clearSession(userId);
-  store.setSession(userId, { type: 'pomodoro', step: 'task', draft: {} });
-  await ctx.reply(
-    [
-      'Выберите задачу для таймера.',
-      'Введите номер задачи (например, 3).',
-      '',
-      lines,
-    ].join('\n'),
-    { attachments: [MENU_BACK] },
-  );
 }
 
 async function showSettings(ctx) {
@@ -285,18 +233,20 @@ async function showSettings(ctx) {
     [Keyboard.button.callback('⬅️ В меню', 'menu:back')],
   ]);
 
-  await ctx.reply(
-    [
-      '*Настройки уведомлений*',
-      `• Дайджест: ${settings.dailyDigest ? 'включён' : 'выключен'}`,
-      settings.dailyDigest ? `• Время дайджеста: ${settings.dailyDigestTime || '09:00'}` : null,
-      `• Напоминание о событиях: за ${settings.reminderMinutesBeforeEvent} мин`,
-      `• Часовой пояс: ${settings.timezone}`,
-    ]
-      .filter(Boolean)
-      .join('\n'),
-    { format: 'markdown', attachments: [keyboard] },
-  );
+  const settingsText = [
+    '*Настройки уведомлений*',
+    `• Дайджест: ${settings.dailyDigest ? 'включён' : 'выключен'}`,
+    settings.dailyDigest ? `• Время дайджеста: ${settings.dailyDigestTime || '09:00'}` : null,
+    `• Напоминание о событиях: за ${settings.reminderMinutesBeforeEvent} мин`,
+    `• Часовой пояс: ${settings.timezone}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  await sendMessageWithButtons(ctx, settingsText, {
+    format: 'markdown',
+    attachments: [keyboard],
+  });
 }
 
 async function showTasksHub(ctx) {
@@ -304,7 +254,7 @@ async function showTasksHub(ctx) {
   const tasks = await store.getTasks(userId, false); // Показываем только активные задачи
 
   if (tasks.length === 0) {
-    await ctx.reply('Задач пока нет.', {
+    await sendMessageWithButtons(ctx, 'Задач пока нет.', {
       format: 'markdown',
       attachments: [TASKS_KEYBOARD],
     });
@@ -313,7 +263,7 @@ async function showTasksHub(ctx) {
 
   const tasksBlock = ['*Задачи*', '', ...tasks.map(formatTask)].join('\n');
 
-  await ctx.reply(tasksBlock, {
+  await sendMessageWithButtons(ctx, tasksBlock, {
     format: 'markdown',
     attachments: [TASKS_KEYBOARD],
   });
@@ -324,20 +274,19 @@ async function showEventsHub(ctx) {
   const events = await store.getEvents(userId);
 
   if (events.length === 0) {
-    await ctx.reply('Событий пока нет.', {
-      format: 'markdown',
-      attachments: [EVENTS_KEYBOARD],
-    });
+  await sendMessageWithButtons(ctx, 'Событий пока нет.', {
+    format: 'markdown',
+    attachments: [EVENTS_KEYBOARD],
+  });
     return;
   }
 
-  // Группируем события по дням
   const eventsByDate = new Map();
   
   for (const event of events) {
     const eventDate = new Date(event.datetime);
-    const dateKey = format(eventDate, 'yyyy-MM-dd'); // Ключ для группировки
-    const dateLabel = format(eventDate, 'd MMMM', { locale: ru }); // Отображение даты
+    const dateKey = format(eventDate, 'yyyy-MM-dd');
+    const dateLabel = format(eventDate, 'd MMMM', { locale: ru });
     
     if (!eventsByDate.has(dateKey)) {
       eventsByDate.set(dateKey, { label: dateLabel, events: [] });
@@ -346,16 +295,13 @@ async function showEventsHub(ctx) {
     eventsByDate.get(dateKey).events.push(event);
   }
 
-  // Сортируем по дате (от ближайших к дальним)
   const sortedDates = Array.from(eventsByDate.keys()).sort();
   
-  // Формируем текст с группировкой по дням
   const eventBlocks = [];
   
   for (const dateKey of sortedDates) {
     const { label, events: dayEvents } = eventsByDate.get(dateKey);
     
-    // Сортируем события дня по времени
     dayEvents.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
     
     const dayEventsText = dayEvents.map(event => {
@@ -369,7 +315,7 @@ async function showEventsHub(ctx) {
 
   const eventsBlock = ['*События*', '', ...eventBlocks].join('\n');
 
-  await ctx.reply(eventsBlock, {
+  await sendMessageWithButtons(ctx, eventsBlock, {
     format: 'markdown',
     attachments: [EVENTS_KEYBOARD],
   });
@@ -428,9 +374,13 @@ async function showTaskStats(ctx) {
       : 'Создайте первую задачу, чтобы начать отслеживать прогресс!',
   ].join('\n');
   
-  await ctx.reply(statsText, {
+  const keyboard = Keyboard.inlineKeyboard([
+    [Keyboard.button.callback('⬅️ В меню', 'menu:back')],
+  ]);
+  
+  await sendMessageWithButtons(ctx, statsText, {
     format: 'markdown',
-    attachments: [TASKS_KEYBOARD],
+    attachments: [keyboard],
   });
 }
 
@@ -452,99 +402,112 @@ async function startDeleteEventFlow(ctx) {
   );
 }
 
+/**
+ * Отправляет или редактирует сообщение
+ * @param {Object} ctx - Контекст бота
+ * @param {string} message - Текст сообщения
+ * @param {Object} options - Опции (attachments, files, format)
+ * @returns {Promise<string>} - ID сообщения
+ */
+/**
+ * Отправляет сообщение с кнопками, всегда удаляя предыдущее сообщение с кнопками
+ * Используется для экранов, где взаимодействие происходит только через кнопки
+ */
+async function sendMessageWithButtons(ctx, message, options = {}) {
+  const userId = getUserId(ctx);
+  if (!userId) {
+    return await ctx.reply(message, options);
+  }
+  
+  const lastMessageId = store.getLastMessageId(userId);
+  if (lastMessageId) {
+    try {
+      if (bot.api.deleteMessage) {
+        await bot.api.deleteMessage(lastMessageId);
+      } else if (bot.api.removeMessage) {
+        await bot.api.removeMessage(lastMessageId);
+      }
+    } catch (error) {
+    }
+  }
+  
+  try {
+    const response = await ctx.reply(message, options);
+    
+    let messageId = response?.body?.mid || response?.messageId || response?.id || response?.message?.id || response?.body?.id;
+    
+    if (!messageId && ctx.message?.id) {
+      messageId = ctx.message.id;
+    }
+    
+    if (!messageId && ctx.message?.body?.mid) {
+      messageId = ctx.message.body.mid;
+    }
+    
+    if (messageId) {
+      store.setLastMessageId(userId, messageId.toString());
+      return messageId.toString();
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error sending message:', error);
+    throw error;
+  }
+}
+
 async function showTimerScreen(ctx) {
   const userId = getUserId(ctx);
-  const session = pomodoro.getSession(userId);
-  
-  // Пытаемся получить задачу из сессии, если есть
-  let taskTitle = null;
-  if (session?.task?._dbId) {
-    // Если есть _dbId, значит это задача из БД
-    const tasks = await store.getTasks(userId);
-    const task = tasks.find(t => t._dbId === session.task._dbId);
-    if (task) taskTitle = task.title;
-  } else if (session?.task?.title) {
-    taskTitle = session.task.title;
+  if (!userId) {
+    return;
   }
+  
+  const session = pomodoro.getSession(userId);
   
   const keyboard = session
     ? Keyboard.inlineKeyboard([
-      [Keyboard.button.callback('⏹ Остановить таймер', 'timer:stop')],
+      [Keyboard.button.callback('⏸️ Остановить таймер', 'timer:stop')],
+      [Keyboard.button.callback('📊 Статистика', 'timer:stats')],
       [Keyboard.button.callback('⬅️ В меню', 'menu:back')],
     ])
     : TIMER_START_KEYBOARD;
 
-  try {
-    // Получаем статистику
-    const stats = await store.getPomodoroTotalStats(userId);
-    
-    // Генерируем изображение
-    const imagePath = await generatePomodoroChart(stats, session);
-    const imageBuffer = await readFile(imagePath);
-    
-    // Отправляем изображение
-    if (session) {
-      const message = [
-        '🍅 *Помодоро запущен*',
-        `📋 Режим: ${taskTitle ? `задача "${taskTitle}"` : 'свободный'}`,
-        `🔄 Цикл: ${session.currentCycle}/${session.cycles}`,
-        `⏱ Интервалы: ${session.workMinutes} мин работа / ${session.breakMinutes} мин отдых`,
-      ].join('\n');
-      
-      // Отправляем изображение через bot.api
-      await bot.api.sendMessageToUser(Number(userId), message, {
-        format: 'markdown',
-        attachments: [keyboard],
-        files: [{ name: 'pomodoro.png', data: imageBuffer, mimeType: 'image/png' }]
-      });
-    } else {
-      const message = stats && stats.totalSessions > 0
-        ? '🍅 *Помодоро таймер*\n\nТаймер не запущен. Выберите режим запуска.'
-        : '🍅 *Помодоро таймер*\n\nТаймер не запущен. Выберите режим запуска.';
-      
-      // Отправляем изображение через bot.api
-      await bot.api.sendMessageToUser(Number(userId), message, {
-        format: 'markdown',
-        attachments: [keyboard],
-        files: [{ name: 'pomodoro.png', data: imageBuffer, mimeType: 'image/png' }]
-      });
-    }
-    
-    // Удаляем временный файл
-    await cleanupImage(imagePath);
-  } catch (error) {
-    console.error('Error generating chart:', error);
-    // Если не удалось сгенерировать изображение, показываем текстовую версию
-    if (session) {
-      const { currentCycle, cycles, workMinutes, breakMinutes } = session;
-      const progressBar = createProgressBar(currentCycle, cycles);
-      const cycleVisualization = createCycleVisualization(currentCycle, cycles);
-      
-      const message = [
-        '🍅 *Помодоро запущен*',
-        '',
-        `📋 Режим: ${taskTitle ? `задача "${taskTitle}"` : 'свободный'}`,
-        `🔄 Цикл: ${currentCycle}/${cycles}`,
-        `⏱ Интервалы: ${workMinutes} мин работа / ${breakMinutes} мин отдых`,
-        '',
-        cycleVisualization,
-        progressBar,
-      ].join('\n');
-
-      await ctx.reply(message, { format: 'markdown', attachments: [keyboard] });
-    } else {
-      const stats = await store.getPomodoroTotalStats(userId);
-      let message = '🍅 *Помодоро таймер*\n\nТаймер не запущен. Выберите режим запуска.';
-      
-      if (stats && stats.totalSessions > 0) {
-        const statsChart = createStatsChart(stats);
-        message = `🍅 *Помодоро таймер*\n\n${statsChart}\n\nВыберите режим запуска:`;
+  const lastMessageId = store.getLastMessageId(userId);
+  if (lastMessageId) {
+    try {
+      if (bot.api.deleteMessage) {
+        await bot.api.deleteMessage(lastMessageId);
+      } else if (bot.api.removeMessage) {
+        await bot.api.removeMessage(lastMessageId);
       }
-      
-      await ctx.reply(message, { format: 'markdown', attachments: [keyboard] });
+    } catch (error) {
     }
   }
+  
+  if (session) {
+    const phase = session.isWorkPhase ? '🔥 Работа' : '☕ Отдых';
+    const message = [
+      '🍅 *Помодоро запущен*',
+      `📊 Фаза: ${phase}`,
+      `🔄 Цикл: ${session.currentCycle}/${session.cycles}`,
+      `⏱ Интервалы: ${session.workMinutes} мин работа / ${session.breakMinutes} мин отдых`,
+    ].join('\n');
+    
+    await sendMessageWithButtons(ctx, message, {
+      format: 'markdown',
+      attachments: [keyboard],
+    });
+  } else {
+    const message = '🍅 *Помодоро таймер*\n\nТаймер не запущен. Выберите режим запуска.';
+    
+    await sendMessageWithButtons(ctx, message, {
+      format: 'markdown',
+      attachments: [keyboard],
+    });
+  }
 }
+
+pomodoro = new PomodoroManager(bot, showTimerScreen, store, TIMER_START_KEYBOARD);
 
 async function handleTaskFlow(ctx, session) {
   const userId = getUserId(ctx);
@@ -624,7 +587,6 @@ async function handleTaskFlow(ctx, session) {
     const { day: taskDay, month: taskMonth, year: taskYear } = session.draft;
     const dueDate = new Date(taskYear, taskMonth - 1, taskDay, hours, minutes);
     
-    // Проверяем, что дата валидна
     if (dueDate.getDate() !== taskDay || dueDate.getMonth() !== taskMonth - 1 || dueDate.getFullYear() !== taskYear) {
       await ctx.reply('❌ Неверная дата (например, 31 февраля не существует). Попробуйте снова:', { attachments: [MENU_BACK] });
       session.step = 'due_day';
@@ -635,7 +597,6 @@ async function handleTaskFlow(ctx, session) {
       return;
     }
 
-    // Проверяем, что дата не в прошлом
     const now = new Date();
     if (isPast(dueDate) && !isToday(dueDate)) {
       await ctx.reply('❌ Нельзя добавить задачу с прошедшей датой. Попробуйте снова:', { attachments: [MENU_BACK] });
@@ -647,7 +608,6 @@ async function handleTaskFlow(ctx, session) {
       return;
     }
 
-    // Если дата сегодня, проверяем, что время не в прошлом
     if (isToday(dueDate) && dueDate < now) {
       await ctx.reply('❌ Нельзя добавить задачу с прошедшим временем сегодня. Попробуйте снова:', { attachments: [MENU_BACK] });
       session.step = 'due_time';
@@ -739,7 +699,6 @@ async function handleEventFlow(ctx, session) {
     
     const datetime = new Date(eventYear, eventMonth - 1, eventDay, hours, minutes);
     
-    // Проверяем, что дата валидна
     if (datetime.getDate() !== eventDay || datetime.getMonth() !== eventMonth - 1 || datetime.getFullYear() !== eventYear) {
       await ctx.reply('❌ Неверная дата (например, 31 февраля не существует). Попробуйте снова:', { attachments: [MENU_BACK] });
       session.step = 'datetime_day';
@@ -750,7 +709,6 @@ async function handleEventFlow(ctx, session) {
       return;
     }
 
-    // Проверяем, что дата не в прошлом
     const now = new Date();
     if (isPast(datetime) && !isToday(datetime)) {
       await ctx.reply('❌ Нельзя добавить событие с прошедшей датой. Попробуйте снова:', { attachments: [MENU_BACK] });
@@ -762,7 +720,6 @@ async function handleEventFlow(ctx, session) {
       return;
     }
 
-    // Если дата сегодня, проверяем, что время не в прошлом
     if (isToday(datetime) && datetime < now) {
       await ctx.reply('❌ Нельзя добавить событие с прошедшим временем сегодня. Попробуйте снова:', { attachments: [MENU_BACK] });
       session.step = 'datetime_time';
@@ -773,7 +730,6 @@ async function handleEventFlow(ctx, session) {
     session.draft.datetime = datetime.toISOString();
     session.step = 'reminder';
     
-    // Получаем настройки пользователя для показа дефолтного значения
     const settings = await store.getSettings(userId);
     const defaultReminder = settings.reminderMinutesBeforeEvent || 30;
     
@@ -792,7 +748,6 @@ async function handleEventFlow(ctx, session) {
   }
 
   if (session.step === 'reminder') {
-    // Если пользователь ввел "-", используем дефолтное значение
     if (text === '-') {
       const settings = await store.getSettings(userId);
       const minutes = settings.reminderMinutesBeforeEvent || 30;
@@ -882,7 +837,7 @@ async function handlePomodoroFlow(ctx, session) {
     const cycles = Number(text) || 4;
     const { task, workMinutes, breakMinutes } = session.draft;
 
-    pomodoro.start(userId, ctx, task, { workMinutes, breakMinutes, cycles });
+    await pomodoro.start(userId, ctx, task, { workMinutes, breakMinutes, cycles });
     store.clearSession(userId);
     await ctx.reply(
       `Стартуем помодоро для "${task.title}": ${workMinutes}/${breakMinutes} мин, ${cycles} циклов.`,
@@ -917,7 +872,7 @@ async function handlePomodoroFreeFlow(ctx, session) {
     const cycles = Number(text) || 4;
     const { workMinutes, breakMinutes } = session.draft;
 
-    pomodoro.start(userId, ctx, null, { workMinutes, breakMinutes, cycles });
+    await pomodoro.start(userId, ctx, null, { workMinutes, breakMinutes, cycles });
     store.clearSession(userId);
     await ctx.reply(
       `Стартуем свободный помодоро: ${workMinutes}/${breakMinutes} мин, ${cycles} циклов.`,
@@ -932,16 +887,17 @@ async function startWelcomeFlow(ctx) {
   await store.ensureUser(userId);
   store.setSession(userId, { type: 'welcome', step: 'daily_digest', draft: {} });
   
+  store.clearLastMessageId(userId);
+  
   const keyboard = Keyboard.inlineKeyboard([
     [Keyboard.button.callback('✅ Да', 'welcome:daily_yes')],
     [Keyboard.button.callback('❌ Нет', 'welcome:daily_no')],
   ]);
   
-  await ctx.reply(
-    '👋 Привет! Добро пожаловать в бота для продуктивности!\n\n' +
-    'Хотите ли вы получать ежедневный дайджест событий и задач?',
-    { attachments: [keyboard] }
-  );
+  const message = '👋 Привет! Добро пожаловать в бота для продуктивности!\n\n' +
+    'Хотите ли вы получать ежедневный дайджест событий и задач?';
+  
+  await sendMessageWithButtons(ctx, message, { attachments: [keyboard] });
 }
 
 bot.command('start', async (ctx) => {
@@ -973,7 +929,7 @@ bot.command('cancel', (ctx) => {
 
 bot.command('stop', async (ctx) => {
   const userId = getUserId(ctx);
-  const stopped = pomodoro.stop(userId);
+  const stopped = await pomodoro.stop(userId);
   if (!stopped) {
     await showTimerScreen(ctx);
     return;
@@ -1025,87 +981,63 @@ bot.action('event:reminder:default', async (ctx) => {
   await showEventsHub(ctx);
 });
 
-bot.action('menu:timer', (ctx) => showTimerScreen(ctx));
+bot.action('menu:timer', async (ctx) => {
+  try {
+    await showTimerScreen(ctx);
+  } catch (error) {
+    console.error('Error showing timer screen:', error);
+    const userId = getUserId(ctx);
+    if (userId) {
+      await sendMessageWithButtons(ctx, '❌ Ошибка при открытии таймера. Попробуйте еще раз.', {
+        attachments: [TIMER_START_KEYBOARD]
+      });
+    }
+  }
+});
 
 bot.action('timer:stats', async (ctx) => {
   const userId = getUserId(ctx);
   const stats = await store.getPomodoroStats(userId);
   
   if (!stats || !stats.total.totalSessions) {
-    await ctx.reply(
+    await sendMessageWithButtons(
+      ctx,
       '🍅 У вас пока нет завершенных Pomodoro сессий.\n\nЗапустите таймер через меню, чтобы начать отслеживать статистику!',
       { attachments: [TIMER_START_KEYBOARD] }
     );
     return;
   }
 
-  try {
-    // Генерируем изображение со статистикой
-    const imagePath = await generatePomodoroChart(stats.total, null);
-    const imageBuffer = await readFile(imagePath);
-    
-    const { today, week, month, total } = stats;
-    
-    const message = [
-      '🍅 *Ваша статистика Pomodoro*',
-      '',
-      '📅 *Сегодня:*',
-      `• Сессий: ${today.totalSessions}`,
-      `• Циклов: ${today.totalCycles}`,
-      `• Минут работы: ${today.totalWorkMinutes}`,
-      '',
-      '📆 *За неделю:*',
-      `• Сессий: ${week.totalSessions}`,
-      `• Циклов: ${week.totalCycles}`,
-      `• Часов работы: ${Math.round((week.totalWorkMinutes / 60) * 10) / 10} ч`,
-      '',
-      '📆 *За месяц:*',
-      `• Сессий: ${month.totalSessions}`,
-      `• Циклов: ${month.totalCycles}`,
-      `• Часов работы: ${Math.round((month.totalWorkMinutes / 60) * 10) / 10} ч`,
-    ].join('\n');
+  const { today, week, month, total } = stats;
+  
+  const message = [
+    '🍅 *Ваша статистика Pomodoro*',
+    '',
+    '📅 *Сегодня:*',
+    `• Сессий: ${today.totalSessions}`,
+    `• Циклов: ${today.totalCycles}`,
+    `• Минут работы: ${today.totalWorkMinutes}`,
+    '',
+    '📆 *За неделю:*',
+    `• Сессий: ${week.totalSessions}`,
+    `• Циклов: ${week.totalCycles}`,
+    `• Часов работы: ${Math.round((week.totalWorkMinutes / 60) * 10) / 10} ч`,
+    '',
+    '📆 *За месяц:*',
+    `• Сессий: ${month.totalSessions}`,
+    `• Циклов: ${month.totalCycles}`,
+    `• Часов работы: ${Math.round((month.totalWorkMinutes / 60) * 10) / 10} ч`,
+    '',
+    '📊 *Всего:*',
+    `• Сессий: ${total.totalSessions}`,
+    `• Циклов: ${total.totalCycles}`,
+    `• Часов работы: ${Math.round((total.totalWorkMinutes / 60) * 10) / 10} ч`,
+  ].join('\n');
 
-    // Отправляем изображение через bot.api
-    await bot.api.sendMessageToUser(Number(userId), message, {
-      format: 'markdown',
-      attachments: [TIMER_START_KEYBOARD],
-      files: [{ name: 'pomodoro_stats.png', data: imageBuffer, mimeType: 'image/png' }]
-    });
-    
-    // Удаляем временный файл
-    await cleanupImage(imagePath);
-  } catch (error) {
-    console.error('Error generating stats chart:', error);
-    // Если не удалось сгенерировать изображение, показываем текстовую версию
-    const { today, week, month, total } = stats;
-    const statsChart = createStatsChart(total);
-    
-    const message = [
-      '🍅 *Ваша статистика Pomodoro*',
-      '',
-      statsChart,
-      '',
-      '📅 *Сегодня:*',
-      `• Сессий: ${today.totalSessions}`,
-      `• Циклов: ${today.totalCycles}`,
-      `• Минут работы: ${today.totalWorkMinutes}`,
-      '',
-      '📆 *За неделю:*',
-      `• Сессий: ${week.totalSessions}`,
-      `• Циклов: ${week.totalCycles}`,
-      `• Часов работы: ${Math.round((week.totalWorkMinutes / 60) * 10) / 10} ч`,
-      '',
-      '📆 *За месяц:*',
-      `• Сессий: ${month.totalSessions}`,
-      `• Циклов: ${month.totalCycles}`,
-      `• Часов работы: ${Math.round((month.totalWorkMinutes / 60) * 10) / 10} ч`,
-    ].join('\n');
-
-    await ctx.reply(message, { 
-      format: 'markdown', 
-      attachments: [TIMER_START_KEYBOARD] 
-    });
-  }
+  await sendMessageWithButtons(ctx, message, { 
+    format: 'markdown', 
+    attachments: [TIMER_START_KEYBOARD] 
+  });
 });
 bot.action('menu:back', async (ctx) => {
   const userId = getUserId(ctx);
@@ -1118,21 +1050,22 @@ bot.action('settings:toggle_daily', async (ctx) => {
   const settings = await store.getSettings(userId);
   await store.updateSettings(userId, { dailyDigest: !settings.dailyDigest });
   await notifications.ensureDailyJob(userId);
-  await ctx.reply(`Дайджест ${settings.dailyDigest ? 'выключен' : 'включён'}.`, { attachments: [MENU_BACK] });
+  await sendMessageWithButtons(ctx, `Дайджест ${settings.dailyDigest ? 'выключен' : 'включён'}.`, { attachments: [MENU_BACK] });
+  await showSettings(ctx);
 });
 
 bot.action(/settings:reminder:(\d+)/, async (ctx) => {
   const userId = getUserId(ctx);
   const minutes = Number(ctx.match[1]);
   await store.updateSettings(userId, { reminderMinutesBeforeEvent: minutes });
-  await ctx.reply(`Напоминания будут приходить за ${minutes} минут.`, { attachments: [MENU_BACK] });
+  await showSettings(ctx);
 });
 
 bot.action('settings:digest_time', async (ctx) => {
   const userId = getUserId(ctx);
   const settings = await store.getSettings(userId);
   store.setSession(userId, { type: 'digest_time', step: 'input' });
-  await ctx.reply(
+  await sendMessageWithButtons(ctx,
     `Введите время отправки дайджеста в формате ЧЧ:ММ (например, 09:00 или 18:30)\n\nТекущее время: ${settings.dailyDigestTime || '09:00'}`,
     { attachments: [MENU_BACK] }
   );
@@ -1151,7 +1084,8 @@ bot.action('settings:reminder_time', async (ctx) => {
     [Keyboard.button.callback('⬅️ Назад', 'menu:settings')],
   ]);
   
-  await ctx.reply(
+  await sendMessageWithButtons(
+    ctx,
     `За сколько минут до события вы хотите получать напоминания?\n\n` +
     `Текущее значение: ${currentReminder} минут`,
     { attachments: [reminderKeyboard] }
@@ -1162,7 +1096,6 @@ bot.action(/settings:reminder_time:(\d+)/, async (ctx) => {
   const userId = getUserId(ctx);
   const minutes = Number(ctx.match[1]);
   await store.updateSettings(userId, { reminderMinutesBeforeEvent: minutes });
-  await ctx.reply(`✅ Напоминания будут приходить за ${minutes} минут до события.`, { attachments: [MENU_BACK] });
   await showSettings(ctx);
 });
 
@@ -1201,7 +1134,8 @@ bot.action('welcome:daily_yes', async (ctx) => {
     [Keyboard.button.callback('Другое', 'welcome:reminder:custom')],
   ]);
   
-  await ctx.reply(
+  await sendMessageWithButtons(
+    ctx,
     'За сколько минут до события вы хотите получать напоминания?',
     { attachments: [keyboard] }
   );
@@ -1222,7 +1156,8 @@ bot.action('welcome:daily_no', async (ctx) => {
     [Keyboard.button.callback('Другое', 'welcome:reminder:custom')],
   ]);
   
-  await ctx.reply(
+  await sendMessageWithButtons(
+    ctx,
     'За сколько минут до события вы хотите получать напоминания?',
     { attachments: [keyboard] }
   );
@@ -1237,7 +1172,8 @@ bot.action(/welcome:reminder:(\d+)/, async (ctx) => {
   session.draft.reminderMinutes = minutes;
   session.step = 'timezone';
   
-  await ctx.reply(
+  await sendMessageWithButtons(
+    ctx,
     'Введите ваш часовой пояс (например, Europe/Moscow, Europe/Kaliningrad, Asia/Almaty):\n\n' +
     'Или введите "-" для использования Europe/Moscow по умолчанию.',
     { attachments: [MENU_BACK] }
@@ -1250,17 +1186,114 @@ bot.action('welcome:reminder:custom', async (ctx) => {
   if (!session || session.type !== 'welcome') return;
   
   session.step = 'reminder_custom';
-  await ctx.reply(
+  await sendMessageWithButtons(
+    ctx,
     'Введите количество минут (например, 45):',
     { attachments: [MENU_BACK] }
   );
 });
 
-bot.action('timer:start_task', async (ctx) => await startPomodoroFlow(ctx, { mode: 'task' }));
-bot.action('timer:start_free', async (ctx) => await startPomodoroFlow(ctx, { mode: 'free' }));
+bot.action('timer:start', async (ctx) => {
+  const userId = getUserId(ctx);
+  if (!userId) return;
+  
+  const session = pomodoro.getSession(userId);
+  if (session) {
+    await sendMessageWithButtons(ctx, '⏸️ Таймер уже запущен. Остановите его перед запуском нового.', {
+      attachments: [TIMER_START_KEYBOARD]
+    });
+    return;
+  }
+  
+  const settings = await store.getSettings(userId);
+  const workMinutes = settings.pomodoroWorkMinutes || 25;
+  const breakMinutes = settings.pomodoroBreakMinutes || 5;
+  const cycles = settings.pomodoroCycles || 4;
+  
+  await pomodoro.start(userId, ctx, null, { workMinutes, breakMinutes, cycles });
+});
+
+async function showPomodoroSettings(ctx) {
+  const userId = getUserId(ctx);
+  if (!userId) return;
+  
+  const settings = await store.getSettings(userId);
+  const workMinutes = settings.pomodoroWorkMinutes || 25;
+  const breakMinutes = settings.pomodoroBreakMinutes || 5;
+  const cycles = settings.pomodoroCycles || 4;
+  
+  const keyboard = Keyboard.inlineKeyboard([
+    [Keyboard.button.callback(`⏰ Работа: ${workMinutes} мин`, 'timer:settings:work')],
+    [Keyboard.button.callback(`☕ Отдых: ${breakMinutes} мин`, 'timer:settings:break')],
+    [Keyboard.button.callback(`🔄 Циклов: ${cycles}`, 'timer:settings:cycles')],
+    [Keyboard.button.callback('⬅️ Назад', 'menu:timer')],
+  ]);
+  
+  await sendMessageWithButtons(
+    ctx,
+    `⚙️ *Настройки Pomodoro*\n\n` +
+    `⏰ Работа: ${workMinutes} мин\n` +
+    `☕ Отдых: ${breakMinutes} мин\n` +
+    `🔄 Циклов: ${cycles}`,
+    { format: 'markdown', attachments: [keyboard] }
+  );
+}
+
+bot.action('timer:settings', async (ctx) => {
+  await showPomodoroSettings(ctx);
+});
+
+// Обработчики для изменения настроек
+bot.action('timer:settings:work', async (ctx) => {
+  const userId = getUserId(ctx);
+  if (!userId) return;
+  
+  store.setSession(userId, {
+    type: 'pomodoro_settings_work',
+    step: 'input',
+  });
+  
+  await sendMessageWithButtons(
+    ctx,
+    '⏰ Введите время работы в минутах (например, 25):',
+    { attachments: [Keyboard.inlineKeyboard([[Keyboard.button.callback('⬅️ Отмена', 'timer:settings')]])] }
+  );
+});
+
+bot.action('timer:settings:break', async (ctx) => {
+  const userId = getUserId(ctx);
+  if (!userId) return;
+  
+  store.setSession(userId, {
+    type: 'pomodoro_settings_break',
+    step: 'input',
+  });
+  
+  await sendMessageWithButtons(
+    ctx,
+    '☕ Введите время отдыха в минутах (например, 5):',
+    { attachments: [Keyboard.inlineKeyboard([[Keyboard.button.callback('⬅️ Отмена', 'timer:settings')]])] }
+  );
+});
+
+bot.action('timer:settings:cycles', async (ctx) => {
+  const userId = getUserId(ctx);
+  if (!userId) return;
+  
+  store.setSession(userId, {
+    type: 'pomodoro_settings_cycles',
+    step: 'input',
+  });
+  
+  await sendMessageWithButtons(
+    ctx,
+    '🔄 Введите количество циклов (например, 4):',
+    { attachments: [Keyboard.inlineKeyboard([[Keyboard.button.callback('⬅️ Отмена', 'timer:settings')]])] }
+  );
+});
 bot.action('timer:stop', async (ctx) => {
   const userId = getUserId(ctx);
-  const stopped = pomodoro.stop(userId);
+  const stopped = await pomodoro.stop(userId);
   if (!stopped) {
     await showTimerScreen(ctx);
     return;
@@ -1290,6 +1323,63 @@ bot.on('message_created', async (ctx) => {
   }
   if (session.type === 'pomodoro_free') {
     await handlePomodoroFreeFlow(ctx, session);
+    return;
+  }
+  if (session.type === 'pomodoro_settings_work') {
+    const workMinutes = Number(ctx.message?.body?.text?.trim());
+    if (!workMinutes || workMinutes < 1 || workMinutes > 120) {
+      await ctx.reply('❌ Введите число от 1 до 120 минут.', {
+        attachments: [Keyboard.inlineKeyboard([[Keyboard.button.callback('⬅️ Отмена', 'timer:settings')]])]
+      });
+      return;
+    }
+    
+    const user = await store.getUserByMaxId(userId);
+    if (user) {
+      await store.settingsRepo.update(user.id, { pomodoroWorkMinutes: workMinutes });
+    }
+    store.clearSession(userId);
+    
+    // Возвращаем к настройкам помодоро
+    await showPomodoroSettings(ctx);
+    return;
+  }
+  if (session.type === 'pomodoro_settings_break') {
+    const breakMinutes = Number(ctx.message?.body?.text?.trim());
+    if (!breakMinutes || breakMinutes < 1 || breakMinutes > 60) {
+      await ctx.reply('❌ Введите число от 1 до 60 минут.', {
+        attachments: [Keyboard.inlineKeyboard([[Keyboard.button.callback('⬅️ Отмена', 'timer:settings')]])]
+      });
+      return;
+    }
+    
+    const user = await store.getUserByMaxId(userId);
+    if (user) {
+      await store.settingsRepo.update(user.id, { pomodoroBreakMinutes: breakMinutes });
+    }
+    store.clearSession(userId);
+    
+    // Возвращаем к настройкам помодоро
+    await showPomodoroSettings(ctx);
+    return;
+  }
+  if (session.type === 'pomodoro_settings_cycles') {
+    const cycles = Number(ctx.message?.body?.text?.trim());
+    if (!cycles || cycles < 1 || cycles > 20) {
+      await ctx.reply('❌ Введите число от 1 до 20 циклов.', {
+        attachments: [Keyboard.inlineKeyboard([[Keyboard.button.callback('⬅️ Отмена', 'timer:settings')]])]
+      });
+      return;
+    }
+    
+    const user = await store.getUserByMaxId(userId);
+    if (user) {
+      await store.settingsRepo.update(user.id, { pomodoroCycles: cycles });
+    }
+    store.clearSession(userId);
+    
+    // Возвращаем к настройкам помодоро
+    await showPomodoroSettings(ctx);
     return;
   }
   if (session.type === 'digest_time') {
@@ -1332,11 +1422,13 @@ bot.on('message_created', async (ctx) => {
     if (session.step === 'reminder_custom') {
       const minutes = parseInt(ctx.message?.body?.text?.trim(), 10);
       if (isNaN(minutes) || minutes < 0) {
+        // При вводе текста отправляем новое сообщение, не редактируем
         await ctx.reply('❌ Введите положительное число минут (например, 45):', { attachments: [MENU_BACK] });
         return;
       }
       session.draft.reminderMinutes = minutes;
       session.step = 'timezone';
+      // При вводе текста отправляем новое сообщение, не редактируем
       await ctx.reply(
         'Введите ваш часовой пояс (например, Europe/Moscow, Europe/Kiev, Asia/Almaty):\n\n' +
         'Или введите "-" для использования Europe/Moscow по умолчанию.',
@@ -1360,6 +1452,9 @@ bot.on('message_created', async (ctx) => {
 
       store.clearSession(userId);
       await notifications.ensureDailyJob(userId);
+      
+      // Очищаем ID сообщения, чтобы финальное сообщение было новым
+      store.clearLastMessageId(userId);
       
       await ctx.reply(
         '✅ Настройки сохранены!\n\n' +

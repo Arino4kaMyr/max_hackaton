@@ -14,6 +14,8 @@ yarn-error.log*
 .env.local
 .env.*.local
 bot/.env
+# Но .env.example должен быть в репозитории
+!.env.example
 
 # Dependencies
 node_modules
