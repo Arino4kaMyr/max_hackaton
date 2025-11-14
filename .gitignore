@@ -1,7 +1,7 @@
 # macOS
 .DS_Store
 
-# logs
+# Logs
 *.log
 logs
 npm-debug.log*
@@ -9,22 +9,49 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env
+# Environment variables
 .env
+.env.local
+.env.*.local
 bot/.env
 
-# node
+# Dependencies
 node_modules
 bot/node_modules
 dist
 coverage
 
-# editor
+# Editor
 .idea
 .vscode
+*.swp
+*.swo
+*~
 
-# lock backups
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
+# Database
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
 
+# Build
+build
+.next
+out
+
+# Lock files (optional - раскомментируйте если не хотите коммитить)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Prisma
+# prisma/migrations (раскомментируйте если не хотите коммитить миграции)
+
+# Docker
+.dockerignore
+
+# Temporary files
+tmp
+temp
+*.tmp

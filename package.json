@@ -1,0 +1,29 @@
+{
+  "name": "max-productivity-bot",
+  "version": "1.0.0",
+  "description": "Productivity bot for MAX messenger with tasks, Pomodoro timer, and events",
+  "type": "module",
+  "scripts": {
+    "migrate": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "prisma:generate": "prisma generate",
+    "prisma:studio": "prisma studio"
+  },
+  "keywords": [
+    "max",
+    "bot",
+    "productivity",
+    "pomodoro"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@maxhub/max-bot-api": "^0.2.1",
+    "@prisma/client": "^6.19.0",
+    "date-fns": "^3.0.6",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0"
+  }
+}
