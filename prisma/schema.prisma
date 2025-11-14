@@ -64,6 +64,9 @@ model UserSettings {
   dailyDigestTime           String   @default("09:00") @map("daily_digest_time")
   reminderMinutesBeforeEvent Int     @default(30) @map("reminder_minutes_before_event")
   timezone                  String   @default("Europe/Moscow")
+  pomodoroWorkMinutes       Int      @default(25) @map("pomodoro_work_minutes")
+  pomodoroBreakMinutes      Int      @default(5) @map("pomodoro_break_minutes")
+  pomodoroCycles            Int      @default(4) @map("pomodoro_cycles")
   createdAt                 DateTime @default(now()) @map("created_at")
   updatedAt                 DateTime @updatedAt @map("updated_at")
 

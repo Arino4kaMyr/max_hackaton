@@ -23,8 +23,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      # ВАЖНО: В Docker используем имя сервиса 'db', а не 'localhost'
       DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@db:5432/${DB_NAME:-productivity_bot}?schema=public
+      DOCKER_ENV: "true"
       BOT_TOKEN: ${BOT_TOKEN}
       MAX_BOT_TOKEN: ${BOT_TOKEN}
       TIMEZONE: ${TIMEZONE:-Europe/Moscow}
@@ -32,7 +32,7 @@ services:
       ENCRYPTION_SECRET_KEY: ${ENCRYPTION_SECRET_KEY:-}
     ports:
       - "${PORT:-3000}:3000"
-      - "5555:5555"  # Порт для Prisma Studio
+      - "5555:5555"
 
 volumes:
   db-data:

@@ -5,11 +5,9 @@ echo "🚀 Initializing database..."
 
 cd /app
 
-# Ждем, пока БД будет готова (healthcheck уже проверил, но подождем еще немного)
 echo "⏳ Waiting for database to be ready..."
 sleep 3
 
-# Проверяем, есть ли миграции
 if [ -d "prisma/migrations" ] && [ "$(ls -A prisma/migrations 2>/dev/null)" ]; then
   echo "📦 Found migrations, deploying..."
   npx prisma migrate deploy || {
@@ -26,8 +24,6 @@ fi
 
 echo "✅ Database schema applied successfully!"
 
-# Запускаем бота
 echo "🤖 Starting bot..."
-cd bot
 exec npm start
 

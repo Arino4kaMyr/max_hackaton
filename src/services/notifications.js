@@ -18,10 +18,8 @@ class NotificationService {
       return;
     }
 
-    // Парсим время из формата "HH:mm" (например, "09:00")
     const [hours, minutes] = (settings.dailyDigestTime || '09:00').split(':').map(Number);
     
-    // Создаем cron правило: "минуты часы * * *"
     const cronRule = `${minutes} ${hours} * * *`;
 
     const job = schedule.scheduleJob(
@@ -54,14 +52,12 @@ class NotificationService {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    // Задачи на сегодня
     const todayTasks = tasks.filter((task) => {
       if (!task.dueDate) return false;
       const due = new Date(task.dueDate);
       return due >= today && due < tomorrow;
     });
 
-    // События на сегодня (с 00:00 до 23:59)
     const todayEvents = events.filter((event) => {
       const eventDate = new Date(event.datetime);
       return eventDate >= today && eventDate < tomorrow;
@@ -127,14 +123,10 @@ class NotificationService {
    * Очистка происходит каждую неделю (в воскресенье в 03:00)
    */
   startTaskCleanup() {
-    // Отменяем предыдущую задачу, если есть
     if (this.cleanupJob) {
       this.cleanupJob.cancel();
     }
 
-    // Очистка каждую неделю в воскресенье в 03:00
-    // Формат cron: секунда минута час день_месяца месяц день_недели
-    // 0 = воскресенье
     this.cleanupJob = schedule.scheduleJob('0 0 3 * * 0', async () => {
       await this.cleanupOldTasks();
     });

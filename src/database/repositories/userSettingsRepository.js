@@ -11,6 +11,9 @@ export class UserSettingsRepository {
         dailyDigestTime: settings.dailyDigestTime,
         reminderMinutesBeforeEvent: settings.reminderMinutesBeforeEvent,
         timezone: settings.timezone,
+        pomodoroWorkMinutes: settings.pomodoroWorkMinutes,
+        pomodoroBreakMinutes: settings.pomodoroBreakMinutes,
+        pomodoroCycles: settings.pomodoroCycles,
       },
       create: {
         userId,
@@ -18,6 +21,9 @@ export class UserSettingsRepository {
         dailyDigestTime: settings.dailyDigestTime || '09:00',
         reminderMinutesBeforeEvent: settings.reminderMinutesBeforeEvent ?? 30,
         timezone: settings.timezone || 'Europe/Moscow',
+        pomodoroWorkMinutes: settings.pomodoroWorkMinutes ?? 25,
+        pomodoroBreakMinutes: settings.pomodoroBreakMinutes ?? 5,
+        pomodoroCycles: settings.pomodoroCycles ?? 4,
       },
     });
   }
@@ -37,6 +43,9 @@ export class UserSettingsRepository {
         dailyDigestTime: '09:00',
         reminderMinutesBeforeEvent: 30,
         timezone: process.env.TIMEZONE || 'Europe/Moscow',
+        pomodoroWorkMinutes: 25,
+        pomodoroBreakMinutes: 5,
+        pomodoroCycles: 4,
       };
     }
     
