@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-productivity_bot}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # ВАЖНО: В Docker используем имя сервиса 'db', а не 'localhost'
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@db:5432/${DB_NAME:-productivity_bot}?schema=public
+      BOT_TOKEN: ${BOT_TOKEN}
+      MAX_BOT_TOKEN: ${BOT_TOKEN}
+      TIMEZONE: ${TIMEZONE:-Europe/Moscow}
+      PORT: ${PORT:-3000}
+      ENCRYPTION_SECRET_KEY: ${ENCRYPTION_SECRET_KEY:-}
+    ports:
+      - "${PORT:-3000}:3000"
+      - "5555:5555"  # Порт для Prisma Studio
+
+volumes:
+  db-data:
+
