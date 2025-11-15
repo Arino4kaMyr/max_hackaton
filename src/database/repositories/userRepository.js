@@ -4,13 +4,11 @@ export class UserRepository {
   async createOrFind(user) {
     const prisma = getPrisma();
     
-    // Пытаемся найти существующего пользователя
     const existing = await prisma.user.findUnique({
       where: { maxUserId: user.maxUserId },
     });
     
     if (existing) {
-      // Обновляем chatId, если он изменился
       if (user.chatId && existing.chatId !== user.chatId) {
         return await prisma.user.update({
           where: { id: existing.id },
@@ -20,7 +18,6 @@ export class UserRepository {
       return existing;
     }
     
-    // Создаем нового пользователя
     return await prisma.user.create({
       data: {
         maxUserId: user.maxUserId,

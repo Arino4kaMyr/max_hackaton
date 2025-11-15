@@ -27,9 +27,9 @@ services:
       DOCKER_ENV: "true"
       BOT_TOKEN: ${BOT_TOKEN}
       MAX_BOT_TOKEN: ${BOT_TOKEN}
+      TZ: Europe/Moscow
       TIMEZONE: ${TIMEZONE:-Europe/Moscow}
       PORT: ${PORT:-3000}
-      ENCRYPTION_SECRET_KEY: ${ENCRYPTION_SECRET_KEY:-}
     ports:
       - "${PORT:-3000}:3000"
       - "5555:5555"
