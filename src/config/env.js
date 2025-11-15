@@ -55,7 +55,6 @@ export function loadEnv() {
     databaseUrl: databaseUrl,
     timezone: process.env.TIMEZONE || 'Europe/Moscow',
     port: parseInt(process.env.PORT || '3000', 10),
-    encryptionSecretKey: process.env.ENCRYPTION_SECRET_KEY || '',
     nodeEnv: process.env.NODE_ENV || 'production',
     dbUser: process.env.DB_USER || 'postgres',
     dbPassword: process.env.DB_PASSWORD || 'postgres',

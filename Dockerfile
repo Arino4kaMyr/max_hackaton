@@ -1,9 +1,13 @@
 FROM node:18-slim
 
+ENV TZ=Europe/Moscow
+
 RUN apt-get update -y && \
     apt-get install -y \
     openssl \
     build-essential \
+    tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

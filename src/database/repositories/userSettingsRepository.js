@@ -35,7 +35,6 @@ export class UserSettingsRepository {
       where: { userId },
     });
     
-    // Возвращаем дефолтные настройки, если их нет
     if (!settings) {
       return {
         userId,

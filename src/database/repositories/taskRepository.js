@@ -33,7 +33,7 @@ export class TaskRepository {
     return await prisma.task.findMany({
       where,
       orderBy: [
-        { completed: 'asc' }, // Сначала незавершенные
+        { completed: 'asc' },
         { dueDate: { sort: 'asc', nulls: 'last' } },
         { createdAt: 'desc' },
       ],
@@ -64,11 +64,9 @@ export class TaskRepository {
   async update(id, updates) {
     const prisma = getPrisma();
     
-    // Убираем поля, которых нет в схеме
     const { deadline, ...validUpdates } = updates;
     if (deadline) validUpdates.dueDate = deadline;
     
-    // Если задача завершается, устанавливаем completedAt
     if (validUpdates.completed === true && !validUpdates.completedAt) {
       validUpdates.completedAt = new Date();
     } else if (validUpdates.completed === false) {
@@ -113,11 +111,6 @@ export class TaskRepository {
     });
   }
 
-  /**
-   * Удаляет завершенные задачи старше указанного количества дней
-   * @param {number} daysOld - количество дней (по умолчанию 7)
-   * @returns {Promise<number>} - количество удаленных задач
-   */
   async deleteOldCompletedTasks(daysOld = 7) {
     const prisma = getPrisma();
     

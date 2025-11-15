@@ -116,10 +116,6 @@ class DBStore {
     return await this.taskRepo.getStats(user.id);
   }
 
-  /**
-   * Удаляет старые завершенные задачи (старше 7 дней)
-   * @returns {Promise<number>} - количество удаленных задач
-   */
   async cleanupOldCompletedTasks() {
     return await this.taskRepo.deleteOldCompletedTasks(7);
   }
@@ -186,6 +182,7 @@ class DBStore {
       await this.eventRepo.delete(event._dbId);
       return {
         id: event.id,
+        _dbId: event._dbId,
         title: event.title,
         datetime: event.datetime,
         reminderMinutes: event.reminderMinutes,

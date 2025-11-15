@@ -20,10 +20,3 @@ export function getPrisma() {
   return prisma;
 }
 
-export async function disconnectPrisma() {
-  if (prisma) {
-    await prisma.$disconnect();
-    prisma = null;
-  }
-}
-

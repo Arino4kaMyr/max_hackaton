@@ -66,11 +66,6 @@ export class PomodoroRepository {
     });
   }
 
-  // ========== Статистика ==========
-
-  /**
-   * Получить все завершенные сессии пользователя
-   */
   async findCompletedByUserId(userId, limit = null) {
     const prisma = getPrisma();
     
@@ -90,9 +85,6 @@ export class PomodoroRepository {
     return await prisma.pomodoroSession.findMany(query);
   }
 
-  /**
-   * Статистика за период
-   */
   async getStatsByDateRange(userId, startDate, endDate) {
     const prisma = getPrisma();
     
@@ -117,9 +109,6 @@ export class PomodoroRepository {
     };
   }
 
-  /**
-   * Статистика за сегодня
-   */
   async getTodayStats(userId) {
     const prisma = getPrisma();
     const today = new Date();
@@ -130,9 +119,6 @@ export class PomodoroRepository {
     return await this.getStatsByDateRange(userId, today, tomorrow);
   }
 
-  /**
-   * Статистика за неделю
-   */
   async getWeekStats(userId) {
     const prisma = getPrisma();
     const weekAgo = new Date();
@@ -143,9 +129,6 @@ export class PomodoroRepository {
     return await this.getStatsByDateRange(userId, weekAgo, now);
   }
 
-  /**
-   * Статистика за месяц
-   */
   async getMonthStats(userId) {
     const prisma = getPrisma();
     const monthAgo = new Date();
@@ -156,9 +139,6 @@ export class PomodoroRepository {
     return await this.getStatsByDateRange(userId, monthAgo, now);
   }
 
-  /**
-   * Общая статистика пользователя
-   */
   async getTotalStats(userId) {
     const prisma = getPrisma();
     

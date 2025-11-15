@@ -1,5 +1,5 @@
 import { Bot, Keyboard } from '@maxhub/max-bot-api';
-import { format, parse, isValid, differenceInDays, isPast, startOfDay, isToday } from 'date-fns';
+import { format, parse, isValid, differenceInDays, isPast, isToday } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 import { loadEnv } from '../config/env.js';
@@ -161,10 +161,8 @@ async function showDailyDigest(ctx) {
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
-  const todayTasks = tasks.filter((task) => {
-    if (!task.dueDate) return false;
-    const due = new Date(task.dueDate);
-    return due >= today && due < tomorrow;
+  const allTasks = tasks.filter((task) => {
+    return task.dueDate && !task.completed;
   });
 
   const todayEvents = events.filter((event) => {
@@ -172,10 +170,21 @@ async function showDailyDigest(ctx) {
     return eventDate >= today && eventDate < tomorrow;
   }).sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
 
-  const taskLines = todayTasks.length > 0
-    ? todayTasks.map(
-        (task) => `• ${task.title} — до ${format(new Date(task.dueDate), 'HH:mm', { locale: ru })}`,
-      )
+  const taskLines = allTasks.length > 0
+    ? allTasks.map((task) => {
+        const due = new Date(task.dueDate);
+        const isOverdue = due < now;
+        const overdueMarker = isOverdue ? ' ⚠️ *ПРОСРОЧЕНО*' : '';
+        let dateStr;
+        if (isOverdue) {
+          dateStr = format(due, 'd MMM yyyy HH:mm', { locale: ru });
+        } else if (due >= today && due < tomorrow) {
+          dateStr = format(due, 'HH:mm', { locale: ru });
+        } else {
+          dateStr = format(due, 'd MMM HH:mm', { locale: ru });
+        }
+        return `• ${task.title} — до ${dateStr}${overdueMarker}`;
+      })
     : [];
 
   const eventLines = todayEvents.length > 0
@@ -185,11 +194,11 @@ async function showDailyDigest(ctx) {
     : [];
 
   const summary = [
-    `📅 *Дайджест на ${format(now, 'd MMMM yyyy', { locale: ru })}*`,
+    `*${format(now, 'd MMMM yyyy', { locale: ru })}*`,
     '',
-    taskLines.length > 0 ? `📋 *Задачи на сегодня (${todayTasks.length}):*\n${taskLines.join('\n')}` : null,
+    taskLines.length > 0 ? `📋 *Задачи (${allTasks.length}):*\n${taskLines.join('\n')}` : null,
     eventLines.length > 0 ? `\n📆 *События на сегодня (${todayEvents.length}):*\n${eventLines.join('\n')}` : null,
-    (!todayTasks.length && !todayEvents.length) ? 'На сегодня нет задач со сроком и событий. Хорошего дня! ✨' : null,
+    (!allTasks.length && !todayEvents.length) ? 'На сегодня нет задач со сроком и событий. Хорошего дня! ✨' : null,
   ]
     .filter(Boolean)
     .join('\n');
@@ -229,7 +238,6 @@ async function showSettings(ctx) {
     ],
     [Keyboard.button.callback('⏰ Изменить время дайджеста', 'settings:digest_time')],
     [Keyboard.button.callback('❗️ Изменить время уведомлений', 'settings:reminder_time')],
-    [Keyboard.button.callback('Сменить часовой пояс', 'settings:timezone')],
     [Keyboard.button.callback('⬅️ В меню', 'menu:back')],
   ]);
 
@@ -238,7 +246,6 @@ async function showSettings(ctx) {
     `• Дайджест: ${settings.dailyDigest ? 'включён' : 'выключен'}`,
     settings.dailyDigest ? `• Время дайджеста: ${settings.dailyDigestTime || '09:00'}` : null,
     `• Напоминание о событиях: за ${settings.reminderMinutesBeforeEvent} мин`,
-    `• Часовой пояс: ${settings.timezone}`,
   ]
     .filter(Boolean)
     .join('\n');
@@ -402,17 +409,6 @@ async function startDeleteEventFlow(ctx) {
   );
 }
 
-/**
- * Отправляет или редактирует сообщение
- * @param {Object} ctx - Контекст бота
- * @param {string} message - Текст сообщения
- * @param {Object} options - Опции (attachments, files, format)
- * @returns {Promise<string>} - ID сообщения
- */
-/**
- * Отправляет сообщение с кнопками, всегда удаляя предыдущее сообщение с кнопками
- * Используется для экранов, где взаимодействие происходит только через кнопки
- */
 async function sendMessageWithButtons(ctx, message, options = {}) {
   const userId = getUserId(ctx);
   if (!userId) {
@@ -709,7 +705,7 @@ async function handleEventFlow(ctx, session) {
       return;
     }
 
-    const now = new Date();
+    const currentNow = new Date();
     if (isPast(datetime) && !isToday(datetime)) {
       await ctx.reply('❌ Нельзя добавить событие с прошедшей датой. Попробуйте снова:', { attachments: [MENU_BACK] });
       session.step = 'datetime_day';
@@ -720,7 +716,7 @@ async function handleEventFlow(ctx, session) {
       return;
     }
 
-    if (isToday(datetime) && datetime < now) {
+    if (isToday(datetime) && datetime < currentNow) {
       await ctx.reply('❌ Нельзя добавить событие с прошедшим временем сегодня. Попробуйте снова:', { attachments: [MENU_BACK] });
       session.step = 'datetime_time';
       await ctx.reply('Введите время в формате ЧЧ:ММ (например, 10:30):', { attachments: [MENU_BACK] });
@@ -760,7 +756,7 @@ async function handleEventFlow(ctx, session) {
       });
       store.clearSession(userId);
 
-      await notifications.scheduleEventReminder(userId, event);
+      await notifications.ensureReminderChecker();
 
       await ctx.reply(
         `Событие "${event.title}" создано на ${format(new Date(event.datetime), 'dd MMM HH:mm', {
@@ -786,7 +782,7 @@ async function handleEventFlow(ctx, session) {
     });
     store.clearSession(userId);
 
-    await notifications.scheduleEventReminder(userId, event);
+    await notifications.ensureReminderChecker();
 
     await ctx.reply(
       `Событие "${event.title}" создано на ${format(new Date(event.datetime), 'dd MMM HH:mm', {
@@ -970,7 +966,7 @@ bot.action('event:reminder:default', async (ctx) => {
   });
   store.clearSession(userId);
 
-  await notifications.scheduleEventReminder(userId, event);
+  await notifications.ensureReminderChecker();
 
   await ctx.reply(
     `Событие "${event.title}" создано на ${format(new Date(event.datetime), 'dd MMM HH:mm', {
@@ -1108,12 +1104,6 @@ bot.action('settings:reminder_time:custom', async (ctx) => {
   );
 });
 
-bot.action('settings:timezone', async (ctx) => {
-  const userId = getUserId(ctx);
-  store.setSession(userId, { type: 'timezone', step: 'input' });
-  await ctx.reply('Введите часовой пояс, например Europe/Moscow', { attachments: [MENU_BACK] });
-});
-
 bot.action('tasks:complete', async (ctx) => await startCompleteTaskFlow(ctx));
 bot.action('tasks:delete', async (ctx) => await startDeleteTaskFlow(ctx));
 bot.action('tasks:stats', async (ctx) => await showTaskStats(ctx));
@@ -1170,13 +1160,23 @@ bot.action(/welcome:reminder:(\d+)/, async (ctx) => {
   
   const minutes = Number(ctx.match[1]);
   session.draft.reminderMinutes = minutes;
-  session.step = 'timezone';
   
-  await sendMessageWithButtons(
-    ctx,
-    'Введите ваш часовой пояс (например, Europe/Moscow, Europe/Kaliningrad, Asia/Almaty):\n\n' +
-    'Или введите "-" для использования Europe/Moscow по умолчанию.',
-    { attachments: [MENU_BACK] }
+  await store.updateSettings(userId, {
+    dailyDigest: session.draft.dailyDigest ?? true,
+    reminderMinutesBeforeEvent: session.draft.reminderMinutes ?? 30,
+  });
+
+  store.clearSession(userId);
+  await notifications.ensureDailyJob(userId);
+  
+  store.clearLastMessageId(userId);
+  
+  await ctx.reply(
+    '✅ Настройки сохранены!\n\n' +
+    `📅 Ежедневный дайджест: ${session.draft.dailyDigest ? 'включен' : 'выключен'}\n` +
+    `⏰ Напоминания за ${session.draft.reminderMinutes ?? 30} минут\n\n` +
+    'Теперь вы можете использовать все функции бота!',
+    { attachments: [MAIN_KEYBOARD] }
   );
 });
 
@@ -1243,7 +1243,6 @@ bot.action('timer:settings', async (ctx) => {
   await showPomodoroSettings(ctx);
 });
 
-// Обработчики для изменения настроек
 bot.action('timer:settings:work', async (ctx) => {
   const userId = getUserId(ctx);
   if (!userId) return;
@@ -1340,7 +1339,6 @@ bot.on('message_created', async (ctx) => {
     }
     store.clearSession(userId);
     
-    // Возвращаем к настройкам помодоро
     await showPomodoroSettings(ctx);
     return;
   }
@@ -1359,7 +1357,6 @@ bot.on('message_created', async (ctx) => {
     }
     store.clearSession(userId);
     
-    // Возвращаем к настройкам помодоро
     await showPomodoroSettings(ctx);
     return;
   }
@@ -1378,7 +1375,6 @@ bot.on('message_created', async (ctx) => {
     }
     store.clearSession(userId);
     
-    // Возвращаем к настройкам помодоро
     await showPomodoroSettings(ctx);
     return;
   }
@@ -1386,7 +1382,6 @@ bot.on('message_created', async (ctx) => {
     const timeInput = ctx.message?.body?.text?.trim();
     if (!timeInput) return;
 
-    // Проверяем формат времени HH:mm
     const timePattern = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/;
     if (!timePattern.test(timeInput)) {
       await ctx.reply(
@@ -1422,45 +1417,25 @@ bot.on('message_created', async (ctx) => {
     if (session.step === 'reminder_custom') {
       const minutes = parseInt(ctx.message?.body?.text?.trim(), 10);
       if (isNaN(minutes) || minutes < 0) {
-        // При вводе текста отправляем новое сообщение, не редактируем
         await ctx.reply('❌ Введите положительное число минут (например, 45):', { attachments: [MENU_BACK] });
         return;
       }
       session.draft.reminderMinutes = minutes;
-      session.step = 'timezone';
-      // При вводе текста отправляем новое сообщение, не редактируем
-      await ctx.reply(
-        'Введите ваш часовой пояс (например, Europe/Moscow, Europe/Kiev, Asia/Almaty):\n\n' +
-        'Или введите "-" для использования Europe/Moscow по умолчанию.',
-        { attachments: [MENU_BACK] }
-      );
-      return;
-    }
-
-    if (session.step === 'timezone') {
-      const timezoneInput = ctx.message?.body?.text?.trim();
-      if (!timezoneInput) return;
-
-      const timezone = timezoneInput === '-' ? 'Europe/Moscow' : timezoneInput;
       
-      // Сохраняем все настройки
       await store.updateSettings(userId, {
         dailyDigest: session.draft.dailyDigest ?? true,
         reminderMinutesBeforeEvent: session.draft.reminderMinutes ?? 30,
-        timezone: timezone,
       });
 
       store.clearSession(userId);
       await notifications.ensureDailyJob(userId);
       
-      // Очищаем ID сообщения, чтобы финальное сообщение было новым
       store.clearLastMessageId(userId);
       
       await ctx.reply(
         '✅ Настройки сохранены!\n\n' +
         `📅 Ежедневный дайджест: ${session.draft.dailyDigest ? 'включен' : 'выключен'}\n` +
-        `⏰ Напоминания за ${session.draft.reminderMinutes ?? 30} минут\n` +
-        `🌍 Часовой пояс: ${timezone}\n\n` +
+        `⏰ Напоминания за ${session.draft.reminderMinutes ?? 30} минут\n\n` +
         'Теперь вы можете использовать все функции бота!',
         { attachments: [MAIN_KEYBOARD] }
       );
@@ -1535,9 +1510,13 @@ bot.on('bot_started', async (ctx) => {
   }
 });
 
-bot.start().then(() => {
+bot.start().then(async () => {
   console.log('MAX Efficiency Bot is ready');
-  // Запускаем автоматическую очистку завершенных задач
   notifications.startTaskCleanup();
+  await notifications.ensureReminderChecker();
+}).catch((error) => {
+  console.error('❌ Ошибка при запуске бота:', error);
+  console.error('Stack trace:', error.stack);
+  process.exit(1);
 });
 
